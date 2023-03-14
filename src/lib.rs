@@ -10,7 +10,8 @@ struct LfoCool {
     params: Arc<LfoCoolParams>,
 
     // In range [0, 1]
-    current_phase_tau: f32
+    current_phase_tau: f32,
+    phase_tau_delta: f32
 }
 
 #[derive(Params)]
@@ -19,9 +20,10 @@ struct LfoCoolParams {
     /// these IDs remain constant, you can rename and reorder these fields as you wish. The
     /// parameters are exposed to the host in the same order they were defined. In this case, this
     /// gain parameter is stored as linear gain while the values are displayed in decibels.
-    #[id = "gain"]
-    pub gain_mod: FloatParam,
+    #[id = "frequency"]
     pub frequency: FloatParam,
+    #[id = "gain_mod"]
+    pub gain_mod: FloatParam,
 }
 
 impl Default for LfoCool {
@@ -29,6 +31,7 @@ impl Default for LfoCool {
         Self {
             params: Arc::new(LfoCoolParams::default()),
             current_phase_tau: 0.,
+            phase_tau_delta: 0.
         }
     }
 }
@@ -41,18 +44,13 @@ impl Default for LfoCoolParams {
             // as decibels is easier to work with, but requires a conversion for every sample.
             frequency: FloatParam::new(
                 "Frequency",
-                util::db_to_gain(0.0),
-                FloatRange::Skewed {
+                0.,
+                FloatRange::Linear {
                     min: 0.,
                     max: 100.,
-                    // This makes the range appear as if it was linear when displaying the values as
-                    // decibels
-                    factor: FloatRange::gain_skew_factor(-100.0, 0.0),
                 },
             )
-                .with_unit(" Hz")
-                .with_value_to_string(formatters::v2s_f32_gain_to_db(2))
-                .with_string_to_value(formatters::s2v_f32_gain_to_db()),
+                .with_value_to_string(formatters::v2s_f32_hz_then_khz(2)),
 
             gain_mod: FloatParam::new(
                 "Gain mod depth",
@@ -143,6 +141,7 @@ impl Plugin for LfoCool {
         _aux: &mut AuxiliaryBuffers,
         _context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
+        self.phase_tau_delta = self.params.frequency.smoothed.next() * consts::PI / _context.transport().sample_rate;
         for channel_samples in buffer.iter_samples() {
             // Smoothing is optionally built into the parameters themselves
             let gain: f32 = if self.params.gain_mod.modulated_normalized_value() == 0. {
@@ -150,11 +149,11 @@ impl Plugin for LfoCool {
             } else { self.params.gain_mod.smoothed.next().to_f32() };
 
             for sample in channel_samples {
-                *sample = *sample * {
+                *sample *= {
                     let sin_sample: f32 = (1. + self.current_phase_tau.sin()) / 2.;
-                    self.current_phase_tau += 0.001;
-                    if self.current_phase_tau >= std::f32::consts::TAU {
-                        self.current_phase_tau -= std::f32::consts::TAU;
+                    self.current_phase_tau += self.phase_tau_delta;
+                    if self.current_phase_tau >= consts::TAU {
+                        self.current_phase_tau -= consts::TAU;
                     }
                     1. - gain + (gain) * sin_sample
                 }
