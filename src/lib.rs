@@ -1,4 +1,5 @@
 use nih_plug::prelude::*;
+use std::f32::consts;
 use std::sync::Arc;
 
 // This is a shortened version of the gain example with most comments removed, check out
@@ -7,22 +8,27 @@ use std::sync::Arc;
 
 struct LfoCool {
     params: Arc<LfoCoolParams>,
+
+    // In range [0, 1]
+    current_phase_tau: f32
 }
 
 #[derive(Params)]
 struct LfoCoolParams {
-    /// The parameter's ID is used to identify the parameter in the wrappred plugin API. As long as
+    /// The parameter's ID is used to identify the parameter in the wrapped plugin API. As long as
     /// these IDs remain constant, you can rename and reorder these fields as you wish. The
     /// parameters are exposed to the host in the same order they were defined. In this case, this
     /// gain parameter is stored as linear gain while the values are displayed in decibels.
     #[id = "gain"]
-    pub gain: FloatParam,
+    pub gain_mod: FloatParam,
+    pub frequency: FloatParam,
 }
 
 impl Default for LfoCool {
     fn default() -> Self {
         Self {
             params: Arc::new(LfoCoolParams::default()),
+            current_phase_tau: 0.,
         }
     }
 }
@@ -33,26 +39,41 @@ impl Default for LfoCoolParams {
             // This gain is stored as linear gain. NIH-plug comes with useful conversion functions
             // to treat these kinds of parameters as if we were dealing with decibels. Storing this
             // as decibels is easier to work with, but requires a conversion for every sample.
-            gain: FloatParam::new(
-                "Gain",
+            frequency: FloatParam::new(
+                "Frequency",
                 util::db_to_gain(0.0),
                 FloatRange::Skewed {
-                    min: util::db_to_gain(-30.0),
-                    max: util::db_to_gain(30.0),
+                    min: 0.,
+                    max: 100.,
                     // This makes the range appear as if it was linear when displaying the values as
                     // decibels
-                    factor: FloatRange::gain_skew_factor(-30.0, 30.0),
+                    factor: FloatRange::gain_skew_factor(-100.0, 0.0),
                 },
             )
-            // Because the gain parameter is stored as linear gain instead of storing the value as
-            // decibels, we need logarithmic smoothing
-            .with_smoother(SmoothingStyle::Logarithmic(50.0))
-            .with_unit(" dB")
-            // There are many predefined formatters we can use here. If the gain was stored as
-            // decibels instead of as a linear gain value, we could have also used the
-            // `.with_step_size(0.1)` function to get internal rounding.
-            .with_value_to_string(formatters::v2s_f32_gain_to_db(2))
-            .with_string_to_value(formatters::s2v_f32_gain_to_db()),
+                .with_unit(" Hz")
+                .with_value_to_string(formatters::v2s_f32_gain_to_db(2))
+                .with_string_to_value(formatters::s2v_f32_gain_to_db()),
+
+            gain_mod: FloatParam::new(
+                "Gain mod depth",
+                util::db_to_gain(-60.0),
+                FloatRange::Skewed {
+                    min: util::db_to_gain( -60.),
+                    max: util::db_to_gain(0.),
+                    // This makes the range appear as if it was linear when displaying the values as
+                    // decibels
+                    factor: FloatRange::gain_skew_factor( -60., 0.0),
+                },
+            )
+                // Because the gain parameter is stored as linear gain instead of storing the value
+                // as decibels, we need logarithmic smoothing
+                .with_smoother(SmoothingStyle::Logarithmic(50.0))
+                .with_unit(" dB")
+                // There are many predefined formatters we can use here. If the gain was stored as
+                // decibels instead of as a linear gain value, we could have also used the
+                // `.with_step_size(0.1)` function to get internal rounding.
+                .with_value_to_string(formatters::v2s_f32_gain_to_db(2))
+                .with_string_to_value(formatters::s2v_f32_gain_to_db()),
         }
     }
 }
@@ -124,10 +145,19 @@ impl Plugin for LfoCool {
     ) -> ProcessStatus {
         for channel_samples in buffer.iter_samples() {
             // Smoothing is optionally built into the parameters themselves
-            let gain = self.params.gain.smoothed.next();
+            let gain: f32 = if self.params.gain_mod.modulated_normalized_value() == 0. {
+                0.
+            } else { self.params.gain_mod.smoothed.next().to_f32() };
 
             for sample in channel_samples {
-                *sample *= gain;
+                *sample = *sample * {
+                    let sin_sample: f32 = (1. + self.current_phase_tau.sin()) / 2.;
+                    self.current_phase_tau += 0.001;
+                    if self.current_phase_tau >= std::f32::consts::TAU {
+                        self.current_phase_tau -= std::f32::consts::TAU;
+                    }
+                    1. - gain + (gain) * sin_sample
+                }
             }
         }
 
