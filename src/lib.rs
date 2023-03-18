@@ -1,12 +1,17 @@
 use nih_plug::prelude::*;
+use atomic_float::AtomicF32;
 use std::f32::consts;
 use std::sync::Arc;
+
+use nih_plug_vizia::ViziaState;
+
+mod editor;
 
 // This is a shortened version of the gain example with most comments removed, check out
 // https://github.com/robbert-vdh/nih-plug/blob/master/plugins/examples/gain/src/lib.rs to get
 // started
 
-struct LfoCool {
+pub struct LfoCool {
     params: Arc<LfoCoolParams>,
 
     // In range [0, 1]
@@ -20,6 +25,10 @@ struct LfoCoolParams {
     /// these IDs remain constant, you can rename and reorder these fields as you wish. The
     /// parameters are exposed to the host in the same order they were defined. In this case, this
     /// gain parameter is stored as linear gain while the values are displayed in decibels.
+
+    #[persist = "editor-state"]
+    editor_state: Arc<ViziaState>,
+
     #[id = "frequency"]
     pub frequency: FloatParam,
     #[id = "gain_mod"]
@@ -39,6 +48,8 @@ impl Default for LfoCool {
 impl Default for LfoCoolParams {
     fn default() -> Self {
         Self {
+            editor_state: editor::default_state(),
+
             // This gain is stored as linear gain. NIH-plug comes with useful conversion functions
             // to treat these kinds of parameters as if we were dealing with decibels. Storing this
             // as decibels is easier to work with, but requires a conversion for every sample.
@@ -130,6 +141,13 @@ impl Plugin for LfoCool {
         true
     }
 
+    fn editor(&self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
+        editor::create(
+            self.params.clone(),
+            self.params.editor_state.clone(),
+        )
+    }
+
     fn reset(&mut self) {
         // Reset buffers and envelopes here. This can be called from the audio thread and may not
         // allocate. You can remove this function if you do not need it.
@@ -159,6 +177,8 @@ impl Plugin for LfoCool {
                 }
             }
         }
+
+        // TODO: Also update potential UI visualizers here
 
         ProcessStatus::Normal
     }
