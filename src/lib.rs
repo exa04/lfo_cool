@@ -28,28 +28,21 @@ struct LfoCoolParams {
 
     #[persist = "editor-state"]
     editor_state: Arc<ViziaState>,
+    #[nested(group = "plug-p")]
+    pub plug_params: PlugParams,
+}
 
+#[derive(Params)]
+struct PlugParams {
     #[id = "frequency"]
     pub frequency: FloatParam,
     #[id = "gain_mod"]
     pub gain_mod: FloatParam,
 }
 
-impl Default for LfoCool {
+impl Default for PlugParams {
     fn default() -> Self {
         Self {
-            params: Arc::new(LfoCoolParams::default()),
-            current_phase_tau: 0.,
-            phase_tau_delta: 0.
-        }
-    }
-}
-
-impl Default for LfoCoolParams {
-    fn default() -> Self {
-        Self {
-            editor_state: editor::default_state(),
-
             // This gain is stored as linear gain. NIH-plug comes with useful conversion functions
             // to treat these kinds of parameters as if we were dealing with decibels. Storing this
             // as decibels is easier to work with, but requires a conversion for every sample.
@@ -83,6 +76,26 @@ impl Default for LfoCoolParams {
                 // `.with_step_size(0.1)` function to get internal rounding.
                 .with_value_to_string(formatters::v2s_f32_gain_to_db(2))
                 .with_string_to_value(formatters::s2v_f32_gain_to_db()),
+        }
+    }
+}
+
+impl Default for LfoCool {
+    fn default() -> Self {
+        Self {
+            params: Arc::new(LfoCoolParams::default()),
+            current_phase_tau: 0.,
+            phase_tau_delta: 0.
+        }
+    }
+}
+
+impl Default for LfoCoolParams {
+    fn default() -> Self {
+        Self {
+            editor_state: editor::default_state(),
+
+            plug_params: PlugParams::default()
         }
     }
 }
@@ -159,12 +172,12 @@ impl Plugin for LfoCool {
         _aux: &mut AuxiliaryBuffers,
         _context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
-        self.phase_tau_delta = self.params.frequency.smoothed.next() * consts::PI / _context.transport().sample_rate;
+        self.phase_tau_delta = self.params.plug_params.frequency.smoothed.next() * consts::PI / _context.transport().sample_rate;
         for channel_samples in buffer.iter_samples() {
             // Smoothing is optionally built into the parameters themselves
-            let gain: f32 = if self.params.gain_mod.modulated_normalized_value() == 0. {
+            let gain: f32 = if self.params.plug_params.gain_mod.modulated_normalized_value() == 0. {
                 0.
-            } else { self.params.gain_mod.smoothed.next().to_f32() };
+            } else { self.params.plug_params.gain_mod.smoothed.next().to_f32() };
 
             for sample in channel_samples {
                 *sample *= {
